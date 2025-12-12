@@ -58,6 +58,7 @@ target/
 .env
 
 # Database
+data/
 *.db
 *.rdb
 
@@ -94,6 +95,4 @@ target/
 
 AIAP 22 Technical Assessment_updated_27Nov2025.pdf
 
-# Virtual environments
-.venv
 
