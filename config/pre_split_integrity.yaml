@@ -1,0 +1,45 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Pre-Split Integrity Pipeline (src/prep/pre_split_integrity.py)
+#
+# This configuration file defines all data cleaning and preprocessing settings required for the
+# AIAP 22 Technical Assessment ML preprocessing pipeline defined in src/prep/preprocess.py. Each 
+# section below corresponds to a specific pipeline step or function, enabling easy adaptation 
+# of preprocessing logic without modifying code.
+#
+# Key sections:
+#   A. Columns to Drop:                             List of columns (e.g., session ID) to remove from input data using [drop_columns].
+#   B. Cleaning outlier value configurations:       Data bounds and outlier-handling logic for selected columns.
+#   C. Columns with Values that need Editing:       Lists of columns for functions relating to variable-level cleaning
+#
+# Modify values in this file to control the cleaning, standardization, and 
+# outlier treatment in the pipeline.
+# ------------------------------------------------------------------------------
+
+### A. Columns to Drop for [drop_columns] ###
+
+columns_to_drop:
+  - 'Unnamed: 0'
+
+### B. Cleaning outlier or impossible value configurations ###
+
+columns_to_replace_impossible_values:
+  NoOfImage:
+    lower_bound: 0
+
+### C. Columns with values that need syntatic recoding ###
+
+# Recode selected column with new values
+columns_to_recode:
+  label: # Flipping the label so that the malicious sites are coded 1 and benign 0
+    0: 1
+    1: 0
+
+# Strip whitespace from these columns  
+columns_to_strip: 
+  - Industry
+  - HostingProvider
+
+# Convert values to snake case
+columns_to_change:
+
+

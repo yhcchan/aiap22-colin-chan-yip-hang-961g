@@ -1,0 +1,96 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Modeling Pipeline (src/model/model.py)
+#
+# This configuration file defines the key parameters used in the machine learning
+# modeling pipeline, including feature selection thresholds, hyperparameter grids
+# for GridSearchCV, class weighting strategies, and evaluation metrics.
+#
+# Sections:
+# A. Feature Selection Parameters:
+#    - Specifies model-specific thresholds for feature selection using SelectFromModel.
+#    - Thresholds can be numeric (e.g., 0.02) or 'mean' to use the average importance.
+#
+# B. Hyperparameter Grids:
+#    - Lists the models to be used in the pipeline, enabling/disabling them as needed.
+#    - Defines parameter grids for each model to be used in hyperparameter tuning via GridSearchCV.
+#    - For CatBoost and XGBoost, additional parameters like class balancing and subsampling are included.
+#
+# C. Class Weights Configuration:
+#    - Enables the computation of balanced class weights for handling class imbalance.
+#    - Currently supports 'balanced' mode, using sklearn's compute_class_weight utility.
+#
+# D. Evaluation Metrics:
+#    - Specifies the primary metric for model selection (e.g., Cohen's Kappa).
+#    - Defines additional metrics for reporting (e.g., accuracy, macro F1, quadratic weighted kappa).
+#    - Supports averaging methods for multi-class metrics (macro, micro, etc.).
+#
+# ------------------------------------------------------------------------------
+
+
+# A. Feature Selection Parameters for Each Model
+
+feature_selection:
+  thresholds:
+    random_forest: 0.02
+    logistic_regression: "mean"
+    lightgbm: "mean"
+    catboost: 0.01
+    xgboost: 0.04
+
+# B. Hyperparameter Grid for GridSearchCV for each Model
+
+models:
+  random_forest:
+    enabled: true
+    param_grid:
+      n_estimators: [10, 20, 50, 100, 150]
+      max_depth: [5, 10, 20]
+  
+  logistic_regression:
+    enabled: true
+    param_grid:
+      C: [10, 50, 100]
+      penalty: ['l1', 'l2']
+      solver: ['liblinear']
+  
+  lightgbm:
+    enabled: true
+    param_grid:
+      num_leaves: [31, 64]
+      learning_rate: [0.1, 0.01]
+      n_estimators: [100, 200]
+  
+  catboost:
+    enabled: true
+    param_grid:
+      depth: [6, 8]
+      learning_rate: [0.1, 0.01]
+      iterations: [100, 200, 300, 500]
+      auto_class_weights: ["Balanced"]
+
+  xgboost:
+    enabled: true
+    param_grid:
+      max_depth: [6]
+      learning_rate: [0.1]
+      n_estimators: [100]
+      subsample: [1.0]
+      colsample_bytree: [1.0]
+      reg_alpha: [0]
+      reg_lambda: [1.0]
+
+# C. Class Weight Configurations
+
+class_weights:
+  enabled: true
+  mode: balanced
+
+# D. Evaluation Metrics
+
+evaluation:
+  primary_metric: cohen_kappa
+  scoring_method: balanced_accuracy # Used to score GridSearchCV to select best hyperparameters
+  additional_metrics: [accuracy, macro_f1, qwk]
+  average: macro
+
+ 

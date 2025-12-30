@@ -89,7 +89,8 @@ data/
 .venv/
 
 # Exclude trained models
-/models/
+models/
+outputs/
 
 # Project files 
 

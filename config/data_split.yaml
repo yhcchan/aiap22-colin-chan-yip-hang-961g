@@ -1,0 +1,19 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Data Split Pipeline (src/data/data_split.py)
+# ------------------------------------------------------------------------------
+# This configuration file defines parameters for splitting the dataset into
+# training and testing sets, ensuring reproducibility and proper stratification
+# based on the target variable.
+#
+#   A. Train / Validation / Test Split:     Designate target feature, split sizes, stratification, and random seed.
+#
+# ------------------------------------------------------------------------------
+
+
+# A. Train / Validation / Test Split Config Values
+train_val_test_split:
+  target_col: label
+  test_size: 0.2        # Portion of data held out for test
+  val_size: 0.1         # Portion of full data reserved for validation
+  stratify: true
+  random_state: 42

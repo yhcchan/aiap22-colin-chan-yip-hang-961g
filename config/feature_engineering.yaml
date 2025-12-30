@@ -1,0 +1,92 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Global Feature Engineering Pipeline (src/features/feature_engineering.py)
+#
+# This configuration file defines all global (i.e. model-agnostic) feature engineering settings required for the
+# AIAP 22 Technical Assessment ML preprocessing pipeline defined in src/data/feature_engineering.py. Each 
+# section below corresponds to a specific step in the feature engineering process, enabling easy adaptation 
+# of feature enmgineering logic without modifying code.
+#
+#   A. Encoding Categorical Features:                 Denote approach to different categorical feature engineering (onehot, ordinal labeling)
+#   B. Scaling for Numerical Independent Features:    Denote columns to apply numerical feature engineering (scaling)
+#   C. Treatment of Target Feature:                   Denote approach to feature engineering of selected target variable
+#   D. Handling Missing Values:                       Denote detailed approaches to handling each column with missing values 
+#
+# ------------------------------------------------------------------------------
+
+### A. Encoding for Categorical Independent Features ###
+
+onehot_features:
+  time_of_day:
+    drop: 'morning'
+  hvac_operation_mode:
+    drop: 'off'
+
+### B. Scaling for Numerical Independent Features ###
+
+scale_features:
+- 
+
+### B2. Threshold-based Categorization ###
+
+# Define numeric columns to convert into categorical indicators based on thresholds.
+# ---- CONFIGURATION GUIDE ---- 
+# 
+# Example structure:
+# categorize_features:
+#   co2_delta:
+#     threshold: 0
+#     labels:
+#       above: 1
+#       below_or_equal: 0
+#     new_column: co2_delta_positive
+
+categorize_features:
+  NoOfPopup:
+    threshold: 0
+    labels:
+      above: 0
+      below_or_equal: 1
+    new_column: NoOfPopupIsZero
+  
+  NoofiFrame:
+    threshold: 0
+    labels:
+      above: 0
+      below_or_equal: 1
+    new_column: NoOfiFrameIsZero
+
+### C. Treatment of Target Feature ###
+
+target_features:
+
+### D. Handling Values for ValueImputer Class ###
+
+# ---- CONFIGURATION GUIDE ----
+# dtype:                  numeric | categorical
+# strategy:               impute | drop
+# impute_method:          mean | median | mode | sentinel   (median allowed for numeric/ordinal only)
+# data_issue:             invalid | missing (whether the value is being imputed because it is missing, or because it was an invalid value that was made NaN during the pre_split_integrity step)
+# sentinel_value:         Value to fill for sentinel imputation (if sentinel impute method is selected)
+# add_flag_column:        true | false
+# groupby_cols:           List of columns to group imputation
+# ordinal:                true | false (if dtype is categorical)
+# categories:             List in order (required if dtype is categorical and ordinal is set to true)
+# -----------------------------
+
+columns_to_impute:
+  NoOfImages:
+    dtype: numeric
+    strategy: impute
+    impute_method: median
+    data_issue: invalid
+    add_flag_column: true
+
+  LineOfCode:
+    dtype: numeric
+    strategy: impute
+    impute_method: median
+    data_issue: missing
+    add_flag_column: true
+
+
+    
