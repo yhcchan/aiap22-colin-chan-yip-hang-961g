@@ -1,12 +1,14 @@
 ﻿# General imports
 from __future__ import annotations
 from pathlib import Path
+from typing import Any
+import warnings
 
+import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
-
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from src.utils import load_yaml_config
 
 """
@@ -18,10 +20,221 @@ features in a standardized manner that can be re-used across different models an
 missing value imputation, encoding, scaling, and other configurable transformations that prepare data for modeling.
 """
 
+### FEATURE ENGINEERING CLASSES ###
+
+"""
+List of classes that execute various feature engineering steps as part of a transformer pipeline
+"""
+
+### A1. One-Hot Encoding for Categorical Independent Features ###
+class OneHotEncoderTransformer(BaseEstimator, TransformerMixin):
+    """
+    Applies OneHotEncoder to specified columns and returns a DataFrame with expanded columns.
+    """
+
+    config_key = "onehot_features"
+
+    def __init__(self, onehot_config: dict | None = None):
+        self.onehot_config = onehot_config or {}
+        self.encoder_: OneHotEncoder | None = None
+        self.columns: list[str] = []
+        self.feature_names_: list[str] = []
+        self.feature_to_columns_: dict[str, list[str]] = {}
+
+    def fit(self, X: pd.DataFrame, y=None):
+        if not self.onehot_config:
+            return self
+        self.columns = [col for col in self.onehot_config.keys() if col in X.columns]
+        if not self.columns:
+            return self
+        drop_values = [self.onehot_config[col].get("drop") for col in self.columns]
+        self.encoder_ = OneHotEncoder(
+            handle_unknown="ignore",
+            sparse_output=False,
+            drop=drop_values,
+        ).fit(X[self.columns])
+        raw_feature_names = self.encoder_.get_feature_names_out(self.columns)
+
+        def clean_columns(cols):
+            return [name.split("__", 1)[-1] if "__" in name else name for name in cols]
+
+        cleaned_feature_names = clean_columns(raw_feature_names)
+        self.feature_names_ = cleaned_feature_names
+        self.feature_to_columns_ = {}
+        for raw, clean in zip(raw_feature_names, cleaned_feature_names):
+            source_col = raw.split("__", 1)[0] if "__" in raw else raw
+            self.feature_to_columns_.setdefault(source_col, []).append(clean)
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.columns or self.encoder_ is None:
+            return X
+        df = X.copy()
+        encoded = pd.DataFrame(
+            self.encoder_.transform(df[self.columns]),
+            columns=self.feature_names_,
+            index=df.index,
+        )
+        df = df.drop(columns=self.columns)
+        return pd.concat([df, encoded], axis=1)
+
+### A2. Threshold-based Category Encoding ###
+class ThresholdCategorizerTransformer(BaseEstimator, TransformerMixin):
+    """
+    Creates categorical indicators based on thresholds defined for numeric columns.
+    """
+
+    config_key = "categorize_features"
+
+    def __init__(self, categorize_config: dict | None = None):
+        self.categorize_config = categorize_config or {}
+        self.fitted_: bool = False
+
+    def fit(self, X, y=None):
+        self.fitted_ = True
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.categorize_config:
+            return X
+        df = X.copy()
+        for col, opts in self.categorize_config.items():
+            if col not in df.columns:
+                continue
+            threshold = opts.get("threshold")
+            if threshold is None:
+                raise ValueError(f"Categorization threshold missing for column '{col}'.")
+            labels = opts.get("labels", {})
+            above_label = labels.get("above", 1)
+            below_label = labels.get("below_or_equal", 0)
+            new_column = opts.get("new_column", f"{col}_categorized")
+            drop_original = opts.get("drop_original", False)
+            choices = np.where(df[col] > threshold, above_label, below_label)
+            df[new_column] = pd.Series(choices, index=df.index)
+            if drop_original:
+                df = df.drop(columns=[col])
+        return df
+
+### A3. Frequency / Count Encodings for Categorical Features ###
+class FrequencyCountTransformer(BaseEstimator, TransformerMixin):
+    """
+    Adds count/frequency encoding for specified categorical columns.
+    """
+
+    config_key = "frequency_features"
+
+    def __init__(self, columns: list[str] | None = None):
+        self.columns = columns or []
+        self.count_maps_: dict[str, dict] = {}
+
+    def fit(self, X: pd.DataFrame, y=None):
+        self.count_maps_ = {}
+        for col in self.columns:
+            if col in X.columns:
+                self.count_maps_[col] = X[col].value_counts().to_dict()
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.count_maps_:
+            return X
+        df = X.copy()
+        for col, count_map in self.count_maps_.items():
+            if col in df.columns:
+                df[f"{col}_count"] = df[col].map(count_map).fillna(0).astype(float)
+        return df
+
+### A4. Ordinal Mapping for Ordinal Categorical Features ###
+class OrdinalMapperTransformer(BaseEstimator, TransformerMixin):
+    """
+    Maps categorical columns to ordinal integer codes using configuration-defined order.
+    """
+
+    config_key = "ordinal_features"
+
+    def __init__(self, ordinal_config: dict | None = None):
+        self.ordinal_config = ordinal_config or {}
+        self.mappings_: dict[str, dict] = {}
+
+    def fit(self, X, y=None):
+        self.mappings_ = {}
+        for col, opts in self.ordinal_config.items():
+            order = opts.get("order")
+            if not order:
+                raise ValueError(f"Order not specified for ordinal column '{col}'.")
+            self.mappings_[col] = {cat: idx for idx, cat in enumerate(order)}
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.mappings_:
+            return X
+        df = X.copy()
+        for col, mapping in self.mappings_.items():
+            if col in df.columns:
+                df[col] = df[col].map(mapping)
+        return df
+
+### B1. Scaling for Numerical Independent Features ###
+class ColumnScalerTransformer(BaseEstimator, TransformerMixin):
+
+    """
+    Applies StandardScaler to specific columns while leaving others unchanged.
+    """
+
+    config_key = "scale_features"
+
+    def __init__(self, columns: list[str] | None = None):
+        self.columns = columns or []
+        self.scaler_: StandardScaler | None = None
+
+    def fit(self, X: pd.DataFrame, y=None):
+        if not self.columns:
+            return self
+        existing_cols = [col for col in self.columns if col in X.columns]
+        if not existing_cols:
+            return self
+        self.columns = existing_cols
+        self.scaler_ = StandardScaler().fit(X[self.columns])
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.columns or self.scaler_ is None:
+            return X
+        df = X.copy()
+        df[self.columns] = self.scaler_.transform(df[self.columns])
+        return df
+
+### B2. Log-Transform for Numerical Independent Features ###
+class LogTransformTransformer(BaseEstimator, TransformerMixin):
+    """
+    Applies log1p transform to specified columns.
+    """
+
+    config_key = "log_transform_features"
+
+    def __init__(self, columns: list[str] | None = None):
+        self.columns = columns or []
+
+    def fit(self, X: pd.DataFrame, y=None):
+        if not self.columns:
+            return self
+        self.columns = [col for col in self.columns if col in X.columns]
+        return self
+
+    def transform(self, X: pd.DataFrame):
+        if not self.columns:
+            return X
+        df = X.copy()
+        for col in self.columns:
+            df[col] = np.log1p(df[col].clip(lower=0))
+        return df
+
+### C. Imputation of Missing Values ###
 class MissingValueImputerTransformer(BaseEstimator, TransformerMixin):
     """
     Custom transformer that imputes values using configuration-driven strategies.
     """
+
+    config_key = "columns_to_impute"
 
     def __init__(self, columns_config: dict | None = None):
         self.columns_config = columns_config or {}
@@ -172,147 +385,7 @@ class MissingValueImputerTransformer(BaseEstimator, TransformerMixin):
 
         return df
 
-
-class ColumnScalerTransformer(BaseEstimator, TransformerMixin):
-    """
-    Applies StandardScaler to specific columns while leaving others unchanged.
-    """
-
-    def __init__(self, columns: list[str] | None = None):
-        self.columns = columns or []
-        self.scaler_: StandardScaler | None = None
-
-    def fit(self, X: pd.DataFrame, y=None):
-        if not self.columns:
-            return self
-        existing_cols = [col for col in self.columns if col in X.columns]
-        if not existing_cols:
-            return self
-        self.columns = existing_cols
-        self.scaler_ = StandardScaler().fit(X[self.columns])
-        return self
-
-    def transform(self, X: pd.DataFrame):
-        if not self.columns or self.scaler_ is None:
-            return X
-        df = X.copy()
-        df[self.columns] = self.scaler_.transform(df[self.columns])
-        return df
-
-
-class ThresholdCategorizerTransformer(BaseEstimator, TransformerMixin):
-    """
-    Creates categorical indicators based on thresholds defined for numeric columns.
-    """
-
-    def __init__(self, categorize_config: dict | None = None):
-        self.categorize_config = categorize_config or {}
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X: pd.DataFrame):
-        if not self.categorize_config:
-            return X
-        df = X.copy()
-        for col, opts in self.categorize_config.items():
-            if col not in df.columns:
-                continue
-            threshold = opts.get("threshold")
-            if threshold is None:
-                raise ValueError(f"Categorization threshold missing for column '{col}'.")
-            labels = opts.get("labels", {})
-            above_label = labels.get("above", 1)
-            below_label = labels.get("below_or_equal", 0)
-            new_column = opts.get("new_column", f"{col}_categorized")
-            mask = df[col] > threshold
-            df[new_column] = mask.replace({True: above_label, False: below_label})
-        return df
-
-
-class OrdinalMapperTransformer(BaseEstimator, TransformerMixin):
-    """
-    Maps categorical columns to ordinal integer codes using configuration-defined order.
-    """
-
-    def __init__(self, ordinal_config: dict | None = None):
-        self.ordinal_config = ordinal_config or {}
-        self.mappings_: dict[str, dict] = {}
-
-    def fit(self, X, y=None):
-        self.mappings_ = {}
-        for col, opts in self.ordinal_config.items():
-            order = opts.get("order")
-            if not order:
-                raise ValueError(f"Order not specified for ordinal column '{col}'.")
-            self.mappings_[col] = {cat: idx for idx, cat in enumerate(order)}
-        return self
-
-    def transform(self, X: pd.DataFrame):
-        if not self.mappings_:
-            return X
-        df = X.copy()
-        for col, mapping in self.mappings_.items():
-            if col in df.columns:
-                df[col] = df[col].map(mapping)
-        return df
-
-
-class OneHotEncoderTransformer(BaseEstimator, TransformerMixin):
-    """
-    Applies OneHotEncoder to specified columns and returns a DataFrame with expanded columns.
-    """
-
-    def __init__(self, onehot_config: dict | None = None):
-        self.onehot_config = onehot_config or {}
-        self.encoder_: OneHotEncoder | None = None
-        self.columns: list[str] = []
-        self.feature_names_: list[str] = []
-        self.feature_to_columns_: dict[str, list[str]] = {}
-
-    def fit(self, X: pd.DataFrame, y=None):
-        if not self.onehot_config:
-            return self
-        self.columns = [col for col in self.onehot_config.keys() if col in X.columns]
-        if not self.columns:
-            return self
-        drop_values = [self.onehot_config[col].get("drop") for col in self.columns]
-        self.encoder_ = OneHotEncoder(
-            handle_unknown="ignore",
-            sparse_output=False,
-            drop=drop_values,
-        ).fit(X[self.columns])
-        raw_feature_names = self.encoder_.get_feature_names_out(self.columns)
-
-        def clean_columns(cols):
-            return [name.split("__", 1)[-1] if "__" in name else name for name in cols]
-
-        cleaned_feature_names = clean_columns(raw_feature_names)
-        self.feature_names_ = cleaned_feature_names
-        self.feature_to_columns_ = {}
-        for raw, clean in zip(raw_feature_names, cleaned_feature_names):
-            source_col = raw.split("__", 1)[0] if "__" in raw else raw
-            self.feature_to_columns_.setdefault(source_col, []).append(clean)
-        return self
-
-    def transform(self, X: pd.DataFrame):
-        if not self.columns or self.encoder_ is None:
-            return X
-        df = X.copy()
-        encoded = pd.DataFrame(
-            self.encoder_.transform(df[self.columns]),
-            columns=self.feature_names_,
-            index=df.index,
-        )
-        ordered_parts = []
-        for col in df.columns:
-            if col in self.feature_to_columns_:
-                ordered_parts.append(encoded[self.feature_to_columns_[col]])
-            else:
-                ordered_parts.append(df[[col]])
-        return pd.concat(ordered_parts, axis=1)
-
-
+### Transform Target 
 class TargetTransformer(BaseEstimator, TransformerMixin):
     """
     Handles target-specific scaling or encoding based on YAML configuration.
@@ -358,50 +431,108 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
             return target_series.map(self.cat_to_int_)
         return target_series
 
+### FEATURE ENGINEERING PIPELINE BUILDER FUNCTIONS ###
+"""
+Code to execute feature pipeline based on specified yaml configurations
+"""
 
-def build_global_feature_pipeline(config: dict) -> Pipeline:
+BASE_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent
+
+TRANSFORMER_CLASSES = [
+    MissingValueImputerTransformer,
+    LogTransformTransformer,
+    ColumnScalerTransformer,
+    ThresholdCategorizerTransformer,
+    FrequencyCountTransformer,
+    OrdinalMapperTransformer,
+    OneHotEncoderTransformer,
+]
+
+TRANSFORMER_REGISTRY: dict[str, type[TransformerMixin]] = {
+    cls.config_key: cls for cls in TRANSFORMER_CLASSES
+}
+
+def load_feature_engineering_config(path: str | Path, section: str | None = None) -> dict[str, Any]:
+    """
+    Load the 'feature_engineering' block from a YAML configuration file.
+    If `section` is provided, it first selects that section (useful for per-model configs).
+    """
+    config_file = Path(path)
+    if not config_file.is_absolute():
+        config_file = BASE_CONFIG_DIR / config_file
+
+    config_data = load_yaml_config(config_file) or {}
+    if section:
+        config_data = config_data.get(section, {})
+    fe_config = config_data.get("feature_engineering")
+    if not isinstance(fe_config, dict):
+        raise ValueError(f"File {config_file} must define a 'feature_engineering' mapping.")
+    return fe_config
+
+
+def _build_feature_pipeline(
+    config: dict,
+) -> Pipeline:
     """
     Builds an sklearn Pipeline composed of configuration-driven transformers.
     """
     steps = []
 
-    impute_cfg = config.get("columns_to_impute", {})
-    if impute_cfg:
-        steps.append(("imputer", MissingValueImputerTransformer(impute_cfg)))
+    for key, cfg_value in config.items():
+        transformer_cls = TRANSFORMER_REGISTRY.get(key)
+        if transformer_cls is None:
+            warnings.warn(
+                f"Feature engineering step '{key}' is not recognized by the pipeline.",
+                UserWarning,
+            )
+            continue
+        if not cfg_value:
+            continue
 
-    categorize_cfg = config.get("categorize_features", {})
-    if categorize_cfg:
-        steps.append(("categorizer", ThresholdCategorizerTransformer(categorize_cfg)))
+        transformer = transformer_cls(cfg_value)
+        steps.append((key, transformer))
 
     if not steps:
-        steps.append(("identity", FunctionTransformer(lambda X: X, validate=False)))
+        raise ValueError("Feature engineering config produced no steps. Please configure at least one transformer.")
 
     return Pipeline(steps)
 
-
-def global_feature_pipeline(
+def feature_pipeline(
     X_train: pd.DataFrame,
     X_val: pd.DataFrame | None = None,
     X_test: pd.DataFrame | None = None,
     y_train: pd.Series | None = None,
     y_val: pd.Series | None = None,
     y_test: pd.Series | None = None,
+    config: dict | None = None,
 ):
     """
     Runs the feature engineering pipeline on the supplied train/val/test splits
     and returns processed feature and target splits.
+
+    Args:
+        config: Dictionary specifying feature-engineering steps and their parameters.
     """
 
     if X_train is None:
-        raise ValueError("Training features must be provided.")
+        raise ValueError("Training features and config must be provided.")
+    if not isinstance(config, dict):
+        raise ValueError("feature_pipeline requires a configuration dictionary.")
 
-    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "feature_engineering.yaml"
-    config = load_yaml_config(config_path)
+    features_pipe = _build_feature_pipeline(config)
+    X_train_processed = features_pipe.fit_transform(X_train)
+    X_val_processed = features_pipe.transform(X_val) if X_val is not None else None
+    X_test_processed = features_pipe.transform(X_test) if X_test is not None else None
 
-    global_features_pipe = build_global_feature_pipeline(config)
-    X_train_processed = global_features_pipe.fit_transform(X_train)
-    X_val_processed = global_features_pipe.transform(X_val) if X_val is not None else None
-    X_test_processed = global_features_pipe.transform(X_test) if X_test is not None else None
+    def _coerce_columns(df: pd.DataFrame | None) -> pd.DataFrame | None:
+        if df is not None:
+            df = df.copy()
+            df.columns = df.columns.map(str)
+        return df
+
+    X_train_processed = _coerce_columns(X_train_processed)
+    X_val_processed = _coerce_columns(X_val_processed)
+    X_test_processed = _coerce_columns(X_test_processed)
 
     target_features = config.get("target_features", {})
     target_transformer = TargetTransformer(target_features) if target_features else None

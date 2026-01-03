@@ -1,22 +1,18 @@
-import yaml
 import json
-import numpy as np  
+import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.metrics import f1_score, accuracy_score, cohen_kappa_score
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from catboost import CatBoostClassifier
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.base import clone
 from pathlib import Path
 
 # Custom function imports
 from src.utils import load_yaml_config
+from src.features.feature_engineering import feature_pipeline
 
 # Compute Class Weights
 def get_class_weights(y, mode='balanced'):
@@ -26,7 +22,6 @@ def get_class_weights(y, mode='balanced'):
         return dict(zip(classes, weights))
     else:
         raise ValueError("Only 'balanced' mode is implemented currently.")
-
 
 # Evaluation Metrics
 def evaluate_model(y_true, y_pred, metrics, average="macro"):
@@ -86,115 +81,161 @@ def save_model_results(model_name, best_params, metrics, feature_importances_df=
     print(f"Saved model results to {output_file}")
 
 
-# Model Mapping
-MODEL_MAPPING = {
-    "random_forest": RandomForestClassifier,
-    "logistic_regression": LogisticRegression,
-    "lightgbm": LGBMClassifier,
-    "catboost": CatBoostClassifier,
-    "xgboost": XGBClassifier
-
-}
-
 # Main Pipeline Workflow
-def run_model_pipeline(X_train, X_test, y_train, y_test):
+def run_model_pipeline(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    y_train: pd.Series,
+    y_val: pd.Series,
+    X_test: pd.DataFrame | None = None,
+    y_test: pd.Series | None = None,
+):
+    """
+    Train/tune models defined in config/model_params.yaml.
+    Workflow:
+        1. Feature-engineer training data (and validation/test when provided).
+        2. Fit models on training data using cross-validation + GridSearch.
+        3. Evaluate best estimator on the validation split (acts as held-out set).
 
-    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "model.yaml"
+    Note: Testing on the real test split should occur after selecting the best
+    model; this function reports validation metrics only.
+    """
+
+    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "model_params.yaml"
     config = load_yaml_config(config_path)
+    if not isinstance(config, dict):
+        raise ValueError("model_params.yaml must define a mapping of model configurations.")
 
     results = []
 
-    class_weights = None
-    if config.get("class_weights", {}).get("enabled", False):
-        class_weights = get_class_weights(y_train, config["class_weights"].get("mode", "balanced"))
-        print(f"Computed class weights: {class_weights}")
-
-    for model_name, model_conf in config["models"].items():
-        if not model_conf.get("enabled", False):
+    for model_name, model_cfg in config.items():
+        if not model_cfg.get("enabled", False):
             continue
 
         print(f"\nRunning pipeline for: {model_name}")
-        ModelClass = MODEL_MAPPING[model_name]
 
-        # Base model kwargs
-        base_model_kwargs = {}
-        if model_name in ["random_forest", "logistic_regression"] and class_weights:
-            base_model_kwargs['class_weight'] = class_weights
-        if model_name == "catboost":
-            base_model_kwargs['loss_function'] = 'MultiClass'
-            base_model_kwargs['auto_class_weights'] = model_conf['param_grid'].get('auto_class_weights', ["Balanced"])[0]
-            base_model_kwargs['verbose'] = False
-        if model_name == "xgboost":
-            base_model_kwargs['objective'] = 'multi:softprob'
-            base_model_kwargs['verbosity'] = 0
-            base_model_kwargs['tree_method'] = 'hist'
-        
-        base_model = ModelClass(**base_model_kwargs)
+        fe_config = model_cfg.get("feature_engineering")
+        if fe_config is None:
+            raise ValueError(f"feature_engineering block missing for model '{model_name}'.")
 
-        # Determine threshold per model from YAML
-        model_thresholds = config.get("feature_selection", {}).get("thresholds", {})
-        threshold = model_thresholds.get(model_name, "mean")  # default fallback to 'mean'
+        (
+            X_train_fe,
+            X_val_fe,
+            X_test_fe,
+            y_train_fe,
+            y_val_fe,
+            y_test_fe,
+        ) = feature_pipeline(
+            X_train,
+            X_val,
+            X_test,
+            y_train,
+            y_val,
+            y_test,
+            config=fe_config,
+        )
 
-        # Feature Selector with per-model threshold
-        selector = SelectFromModel(estimator=clone(base_model), threshold=threshold)
+        class_weights = None
+        cw_cfg = model_cfg.get("class_weights", {})
+        if cw_cfg.get("enabled", False):
+            class_weights = get_class_weights(y_train_fe, cw_cfg.get("mode", "balanced"))
+            print(f"Computed class weights for {model_name}: {class_weights}")
 
-        # Pipeline
-        pipeline = Pipeline([
-            ('feature_selector', selector),
-            ('classifier', base_model)
-        ])
+        if model_name != "logistic_regression":
+            raise NotImplementedError(f"Model '{model_name}' is not yet supported in this pipeline.")
 
-        # GridSearchCV Param Grid
-        param_grid = {f"classifier__{k}": v for k, v in model_conf["param_grid"].items() if k != 'auto_class_weights'}
+        base_model_kwargs = {"max_iter": model_cfg.get("max_iter", 1000)}
+        if class_weights:
+            base_model_kwargs["class_weight"] = class_weights
+        base_model = LogisticRegression(**base_model_kwargs)
 
-        # Stratified CV
+        steps = []
+        threshold = model_cfg.get("feature_selection")
+        if threshold:
+            selector = SelectFromModel(estimator=clone(base_model), threshold=threshold)
+            steps.append(("feature_selector", selector))
+
+        steps.append(("classifier", base_model))
+        pipeline = Pipeline(steps)
+
+        param_grid = {
+            f"classifier__{param}": values
+            for param, values in model_cfg.get("param_grid", {}).items()
+        }
+
+        eval_cfg = model_cfg.get("evaluation", {})
+        primary_metric = eval_cfg.get("primary_metric", "cohen_kappa")
+        additional_metrics = eval_cfg.get("additional_metrics", [])
+        scoring_method = eval_cfg.get("scoring_method", primary_metric)
+        average_method = eval_cfg.get("average", "macro")
+
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-        grid = GridSearchCV(pipeline, param_grid, cv=cv, scoring=config["evaluation"]["scoring_method"], verbose=2)
-        grid.fit(X_train, y_train)
+        grid = GridSearchCV(
+            pipeline,
+            param_grid,
+            cv=cv,
+            scoring=scoring_method,
+            verbose=2,
+        )
+        grid.fit(X_train_fe, y_train_fe)
 
         print(f"Best Params for {model_name}: {grid.best_params_}")
 
-        # Evaluate on Test Set
-        y_pred = grid.best_estimator_.predict(X_test)
-        eval_results = evaluate_model(
-            y_test, y_pred,
-            [config["evaluation"]["primary_metric"]] + config["evaluation"].get("additional_metrics", []),
-            config["evaluation"].get("average", "macro")
+        y_pred = grid.best_estimator_.predict(X_val_fe)
+        metrics = evaluate_model(
+            y_val_fe,
+            y_pred,
+            [primary_metric] + [m for m in additional_metrics if m != primary_metric],
+            average_method,
         )
 
-        print(f"{model_name} Evaluation Results: {eval_results}")
+        print(f"{model_name} Validation Results: {metrics}")
 
-        # Retrieve Feature Importances
-        selector = grid.best_estimator_.named_steps['feature_selector']
-        estimator = selector.estimator_
+        importance_df = None
+        best_pipeline = grid.best_estimator_
+        feature_names = X_train_fe.columns
 
-        if hasattr(estimator, 'feature_importances_'):
+        if "feature_selector" in best_pipeline.named_steps:
+            selector = best_pipeline.named_steps["feature_selector"]
+            support = selector.get_support()
+            feature_names = feature_names[support]
+        estimator = best_pipeline.named_steps["classifier"]
+
+        if hasattr(estimator, "feature_importances_"):
             importances = estimator.feature_importances_
-        elif hasattr(estimator, 'coef_'):
-            importances = estimator.coef_[0]
+        elif hasattr(estimator, "coef_"):
+            coefs = estimator.coef_
+            importances = coefs[0] if coefs.ndim > 1 else coefs
         else:
             importances = None
 
         if importances is not None:
-            selected_features = X_train.columns[selector.get_support()]
-            importance_df = pd.DataFrame({
-                'feature': selected_features,
-                'importance': importances[selector.get_support()]
-            }).sort_values(by='importance', ascending=False)
-
+            importance_df = pd.DataFrame(
+                {
+                    "feature": feature_names,
+                    "importance": importances,
+                }
+            ).sort_values(by="importance", ascending=False)
             print(f"Feature Importances for {model_name}:")
-            print(importance_df)
+            print(importance_df.head())
         else:
             print(f"{model_name} does not provide feature importances.")
 
-        results.append({
-            "model": model_name,
-            "best_params": grid.best_params_,
-            "metrics": eval_results
-        })
-
         outputs_dir = Path(__file__).resolve().parent.parent.parent / "outputs"
-        save_model_results(model_name, grid.best_params_, eval_results, importance_df, outputs_dir)
+        save_model_results(
+            model_name,
+            grid.best_params_,
+            metrics,
+            importance_df,
+            outputs_dir,
+        )
+
+        results.append(
+            {
+                "model": model_name,
+                "best_params": grid.best_params_,
+                "metrics": metrics,
+            }
+        )
 
     return results

@@ -1,0 +1,59 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Global Feature Engineering Pipeline
+#
+# This configuration file defines the ordered sequence of feature engineering
+# steps applied globally (i.e., model-agnostic). Each key inside the top-level
+# `feature_engineering` mapping corresponds to a supported transformer. The
+# order listed is the order executed in the pipeline.
+#
+# Refer to config/feature_engineering_config.md for more details and examples.
+# ------------------------------------------------------------------------------
+
+feature_engineering:
+
+  ### Impute numeric/categorical values prior to other transforms
+  columns_to_impute:
+    LineOfCode:
+      dtype: numeric
+      strategy: impute
+      impute_method: median
+      data_issue: missing
+      add_flag_column: true
+    NoOfImage:
+      dtype: numeric
+      strategy: impute
+      impute_method: median
+      data_issue: invalid
+      add_flag_column: true
+
+  ### One-hot encode selected categorical variables
+  onehot_features:
+    Industry:
+      drop: "eCommerce"
+    HostingProvider:
+      drop: "Unknown Provider"
+
+  ### Threshold-based binarisation 
+  categorize_features:
+    NoOfPopup:
+      threshold: 0
+      labels:
+        above: 0
+        below_or_equal: 1
+      new_column: NoOfPopupIsZero
+      drop_original: false
+
+  ### Frequency/count encoding (leave empty list if unused)
+  frequency_features: []
+
+  ### Ordinal categorical encoding (leave empty dict if unused)
+  ordinal_features: {}
+
+  ### Log transform skewed numeric features (leave empty list if unused)
+  log_transform_features: []
+
+  ### Standard scaling of numeric features (leave empty list if unused)
+  scale_features: []
+
+
+target_features: {}

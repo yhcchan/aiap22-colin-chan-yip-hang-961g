@@ -1,0 +1,82 @@
+# ------------------------------------------------------------------------------
+# YAML Configuration File for Modeling Pipeline (src/model/model.py)
+#
+# This configuration file defines the key parameters used in the machine learning
+# modeling pipeline, including feature selection thresholds, hyperparameter grids
+# for GridSearchCV, class weighting strategies, and evaluation metrics.
+#
+# Sections:
+# A. Feature Selection Parameters:
+#    - Specifies model-specific thresholds for feature selection using SelectFromModel.
+#    - Thresholds can be numeric (e.g., 0.02) or 'mean' to use the average importance.
+#
+# B. Hyperparameter Grids:
+#    - Lists the models to be used in the pipeline, enabling/disabling them as needed.
+#    - Defines parameter grids for each model to be used in hyperparameter tuning via GridSearchCV.
+#    - For CatBoost and XGBoost, additional parameters like class balancing and subsampling are included.
+#
+# C. Class Weights Configuration:
+#    - Enables the computation of balanced class weights for handling class imbalance.
+#    - Currently supports 'balanced' mode, using sklearn's compute_class_weight utility.
+#
+# D. Evaluation Metrics:
+#    - Specifies the primary metric for model selection (e.g., Cohen's Kappa).
+#    - Defines additional metrics for reporting (e.g., accuracy, macro F1, quadratic weighted kappa).
+#    - Supports averaging methods for multi-class metrics (macro, micro, etc.).
+#
+# Refer to feature_engineering_config.txt for a guide on how to configure the various settings. 
+# ------------------------------------------------------------------------------
+
+logistic_regression:
+  
+  enabled: true 
+  
+  feature_selection: "mean"
+
+  class_weights:
+    enabled: true
+    mode: balanced
+
+  feature_engineering:
+    columns_to_impute:
+      LineOfCode:
+        dtype: numeric
+        strategy: impute
+        impute_method: median
+        data_issue: missing
+        add_flag_column: true
+      NoOfImage:
+        dtype: numeric
+        strategy: impute
+        impute_method: median
+        data_issue: invalid
+        add_flag_column: true
+    onehot_features:
+      Industry:
+        drop: "eCommerce"
+      HostingProvider:
+        drop: "Unknown Provider"
+    log_transform_features:
+      - LineOfCode
+      - LargestLineLength
+      - NoOfExternalRef
+    scale_features:
+      - LineOfCode
+      - LargestLineLength
+      - NoOfExternalRef
+      - NoOfImage 
+      - NoOfSelfRef
+      - NoOfExternalRef
+      - DomainAgeMonths
+ 
+  param_grid:
+    C: [10, 50, 100]
+    penalty: ['l1', 'l2']
+    solver: ['liblinear']
+
+  evaluation:
+    primary_metric: cohen_kappa
+    scoring_method: balanced_accuracy # Used to score GridSearchCV to select best hyperparameters
+    additional_metrics: [accuracy, macro_f1, qwk]
+    average: macro
+
