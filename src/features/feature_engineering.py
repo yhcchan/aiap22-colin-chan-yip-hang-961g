@@ -391,6 +391,8 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
     Handles target-specific scaling or encoding based on YAML configuration.
     """
 
+    config_key = "target_features"
+
     def __init__(self, target_config: dict | None = None):
         self.target_config = target_config or {}
         self.target_col: str | None = None
@@ -446,6 +448,7 @@ TRANSFORMER_CLASSES = [
     FrequencyCountTransformer,
     OrdinalMapperTransformer,
     OneHotEncoderTransformer,
+    TargetTransformer
 ]
 
 TRANSFORMER_REGISTRY: dict[str, type[TransformerMixin]] = {

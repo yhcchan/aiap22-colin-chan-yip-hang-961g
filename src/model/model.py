@@ -1,30 +1,43 @@
 import json
-import numpy as np
-import pandas as pd
-from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
-from sklearn.metrics import f1_score, accuracy_score, cohen_kappa_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.utils.class_weight import compute_class_weight
-from sklearn.base import clone
 from pathlib import Path
 
-# Custom function imports
-from src.utils import load_yaml_config
-from src.features.feature_engineering import feature_pipeline
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator, clone
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.feature_selection import SelectFromModel
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, cohen_kappa_score, f1_score
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
 
-# Compute Class Weights
-def get_class_weights(y, mode='balanced'):
-    if mode == 'balanced':
-        classes = np.array(sorted(set(y)))  # Ensure it's a NumPy array
-        weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
-        return dict(zip(classes, weights))
-    else:
-        raise ValueError("Only 'balanced' mode is implemented currently.")
+from src.features.feature_engineering import feature_pipeline
+from src.utils import load_yaml_config
+
+MODEL_REGISTRY: dict[str, type[BaseEstimator]] = {
+    "logistic_regression": LogisticRegression,
+    "random_forest": RandomForestClassifier,
+    "hgboost": HistGradientBoostingClassifier
+}
+
+def _build_estimator(
+    model_name: str,
+    model_cfg: dict,
+    ) -> BaseEstimator:
+    if model_name not in MODEL_REGISTRY:
+        raise ValueError(
+            f"Model '{model_name}' is not registered. "
+            "Add it to MODEL_REGISTRY in src/model/model.py."
+        )
+
+    estimator_cls = MODEL_REGISTRY[model_name]
+    estimator_params = dict(model_cfg.get("estimator_params", {}))
+    return estimator_cls(**estimator_params)
 
 # Evaluation Metrics
-def evaluate_model(y_true, y_pred, metrics, average="macro"):
+def _evaluate_model(y_true, y_pred, metrics, average="macro"):
     results = {}
     for metric in metrics:
         if metric == "accuracy":
@@ -40,7 +53,7 @@ def evaluate_model(y_true, y_pred, metrics, average="macro"):
             raise ValueError(f"Unsupported metric: {metric}")
     return results
 
-def save_model_results(model_name, best_params, metrics, feature_importances_df=None, output_dir="outputs"):
+def _save_model_results(model_name, best_params, metrics, feature_importances_df=None, output_dir="outputs"):
     """
     Saves the results of a model pipeline run into a single CSV/JSON file.
     """
@@ -80,6 +93,38 @@ def save_model_results(model_name, best_params, metrics, feature_importances_df=
 
     print(f"Saved model results to {output_file}")
 
+def _extract_feature_importances(
+    pipeline: Pipeline,
+    feature_names: pd.Index,
+    model_name: str,
+    ) -> pd.DataFrame | None:
+    names = feature_names
+    if "feature_selector" in pipeline.named_steps:
+        selector = pipeline.named_steps["feature_selector"]
+        support = selector.get_support()
+        names = names[support]
+
+    estimator = pipeline.named_steps["classifier"]
+    importances = None
+
+    if hasattr(estimator, "feature_importances_"):
+        importances = estimator.feature_importances_
+    elif hasattr(estimator, "coef_"):
+        coefs = estimator.coef_
+        importances = coefs[0] if coefs.ndim > 1 else coefs
+
+    if importances is None:
+        print(f"{model_name} does not provide feature importances.")
+        return None
+
+    importance_df = (
+        pd.DataFrame({"feature": names, "importance": importances})
+        .sort_values(by="importance", ascending=False)
+        .reset_index(drop=True)
+    )
+    print(f"Feature Importances for {model_name}:")
+    print(importance_df.head())
+    return importance_df
 
 # Main Pipeline Workflow
 def run_model_pipeline(
@@ -89,7 +134,7 @@ def run_model_pipeline(
     y_val: pd.Series,
     X_test: pd.DataFrame | None = None,
     y_test: pd.Series | None = None,
-):
+    ):
     """
     Train/tune models defined in config/model_params.yaml.
     Workflow:
@@ -135,27 +180,15 @@ def run_model_pipeline(
             config=fe_config,
         )
 
-        class_weights = None
-        cw_cfg = model_cfg.get("class_weights", {})
-        if cw_cfg.get("enabled", False):
-            class_weights = get_class_weights(y_train_fe, cw_cfg.get("mode", "balanced"))
-            print(f"Computed class weights for {model_name}: {class_weights}")
-
-        if model_name != "logistic_regression":
-            raise NotImplementedError(f"Model '{model_name}' is not yet supported in this pipeline.")
-
-        base_model_kwargs = {"max_iter": model_cfg.get("max_iter", 1000)}
-        if class_weights:
-            base_model_kwargs["class_weight"] = class_weights
-        base_model = LogisticRegression(**base_model_kwargs)
+        estimator = _build_estimator(model_name, model_cfg)
 
         steps = []
         threshold = model_cfg.get("feature_selection")
-        if threshold:
-            selector = SelectFromModel(estimator=clone(base_model), threshold=threshold)
+        if threshold not in (None, "", False):
+            selector = SelectFromModel(estimator=clone(estimator), threshold=threshold)
             steps.append(("feature_selector", selector))
 
-        steps.append(("classifier", base_model))
+        steps.append(("classifier", estimator))
         pipeline = Pipeline(steps)
 
         param_grid = {
@@ -176,13 +209,14 @@ def run_model_pipeline(
             cv=cv,
             scoring=scoring_method,
             verbose=2,
+            error_score = 'raise'
         )
         grid.fit(X_train_fe, y_train_fe)
 
         print(f"Best Params for {model_name}: {grid.best_params_}")
 
         y_pred = grid.best_estimator_.predict(X_val_fe)
-        metrics = evaluate_model(
+        metrics = _evaluate_model(
             y_val_fe,
             y_pred,
             [primary_metric] + [m for m in additional_metrics if m != primary_metric],
@@ -191,38 +225,15 @@ def run_model_pipeline(
 
         print(f"{model_name} Validation Results: {metrics}")
 
-        importance_df = None
         best_pipeline = grid.best_estimator_
-        feature_names = X_train_fe.columns
-
-        if "feature_selector" in best_pipeline.named_steps:
-            selector = best_pipeline.named_steps["feature_selector"]
-            support = selector.get_support()
-            feature_names = feature_names[support]
-        estimator = best_pipeline.named_steps["classifier"]
-
-        if hasattr(estimator, "feature_importances_"):
-            importances = estimator.feature_importances_
-        elif hasattr(estimator, "coef_"):
-            coefs = estimator.coef_
-            importances = coefs[0] if coefs.ndim > 1 else coefs
-        else:
-            importances = None
-
-        if importances is not None:
-            importance_df = pd.DataFrame(
-                {
-                    "feature": feature_names,
-                    "importance": importances,
-                }
-            ).sort_values(by="importance", ascending=False)
-            print(f"Feature Importances for {model_name}:")
-            print(importance_df.head())
-        else:
-            print(f"{model_name} does not provide feature importances.")
+        importance_df = _extract_feature_importances(
+            best_pipeline,
+            X_train_fe.columns,
+            model_name,
+        )
 
         outputs_dir = Path(__file__).resolve().parent.parent.parent / "outputs"
-        save_model_results(
+        _save_model_results(
             model_name,
             grid.best_params_,
             metrics,
@@ -239,3 +250,4 @@ def run_model_pipeline(
         )
 
     return results
+

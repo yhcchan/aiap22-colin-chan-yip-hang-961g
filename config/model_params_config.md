@@ -1,6 +1,6 @@
 # Model Parameters Configuration Guide
 
-This guide describes the structure of `config/model_params.yaml`, which controls **per‑model** settings (feature engineering, training, and evaluation) used by `run_model_pipeline` in `src/model/model.py`.
+This guide describes the structure of `config/model_params.yaml`, which controls **per-model** settings (feature engineering, training, and evaluation) used by `run_model_pipeline` in `src/model/model.py`.
 
 ---
 
@@ -11,6 +11,7 @@ Each top-level key corresponds to a single model (e.g., `logistic_regression`). 
 model_name:
   enabled: bool
   feature_selection: str | float | null
+  estimator_params: {...}
   class_weights: {...}
   feature_engineering: {...}
   param_grid: {...}
@@ -29,6 +30,18 @@ feature_selection: "mean"  # or numeric threshold (e.g., 0.02). Omit/null to dis
 ```
 
 `"mean"` uses the average absolute coefficient/importance; numeric values act as cutoffs.
+
+---
+
+## Estimator Parameters
+Set estimator-level kwargs (e.g., `max_iter`) before tuning. Use this to override sklearn defaults directly from YAML.
+
+```yaml
+estimator_params:
+  max_iter: 1000
+```
+
+Leave empty (`{}`) to rely on sklearn defaults. The pipeline automatically injects computed class weights when enabled
 
 ---
 
@@ -96,7 +109,7 @@ evaluation:
   average: macro                       # averaging method for multi-class metrics
 ```
 
-- `primary_metric` names the first metric returned to the summary.
+- `primary_metric` names the first metric returned in the summary.
 - `scoring_method` overrides the GridSearch scoring function if desired.
 - `additional_metrics` lists extra validation metrics (exclude duplicates of `primary_metric`).
 - `average` affects metrics such as F1; options mirror sklearn (macro/micro/weighted/etc.).
@@ -107,7 +120,6 @@ evaluation:
 1. Duplicate the block and change the top-level key.
 2. Set `enabled: true`.
 3. Provide a `feature_engineering` block (even if minimal) and the desired `param_grid`.
-4. Adjust `feature_selection`, `class_weights`, and `evaluation` per model specifics.
+4. Adjust `feature_selection`, `estimator_params`, `class_weights`, and `evaluation` per model specifics.
 
-`run_model_pipeline` automatically iterates each enabled model, applies its feature engineering pipeline, performs cross-validation/grid search, and records metrics/results under `outputs/`.
-
+`run_model_pipeline` automatically iterates through each enabled model, applies its feature engineering pipeline, performs cross-validation/grid search, and records metrics/results under `outputs/`.

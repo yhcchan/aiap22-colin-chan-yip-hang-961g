@@ -26,22 +26,63 @@ feature_engineering:
       data_issue: invalid
       add_flag_column: true
 
-  ### One-hot encode selected categorical variables
-  onehot_features:
-    Industry:
-      drop: "eCommerce"
-    HostingProvider:
-      drop: "Unknown Provider"
-
   ### Threshold-based binarisation 
   categorize_features:
+    LineOfCode:
+      threshold: 160
+      labels:
+        above: 1
+        below_or_equal: 0
+      new_column: LineOfCodeAboveThreshold
+      drop_original: False
+
+    LargestLineLength:
+      threshold: 300
+      labels:
+        above: 1
+        below_or_equal: 0
+      new_column: LargestLineLengthAboveThreshold
+      drop_original: False
+
     NoOfPopup:
       threshold: 0
       labels:
         above: 0
         below_or_equal: 1
       new_column: NoOfPopupIsZero
-      drop_original: false
+      drop_original: True
+
+    NoOfiFrame:
+      threshold: 0
+      labels:
+        above: 0
+        below_or_equal: 1
+      new_column: NoOfiFrameIsZero
+      drop_original: True
+
+    NoOfImage:
+      threshold: 0
+      labels:
+        above: 0
+        below_or_equal: 1
+      new_column: NoOfImageIsZero
+      drop_original: True
+
+    NoOfSelfRef:
+      threshold: 9
+      labels:
+        above: 1
+        below_or_equal: 0
+      new_column: NoOfSelfRefAboveThreshold
+      drop_original: False
+
+    NoOfExternalRef:
+      threshold: 3
+      labels:
+        above: 0
+        below_or_equal: 1
+      new_column: NoOfExtRefAboveThreshold
+      drop_original: False
 
   ### Frequency/count encoding (leave empty list if unused)
   frequency_features: []
@@ -55,5 +96,5 @@ feature_engineering:
   ### Standard scaling of numeric features (leave empty list if unused)
   scale_features: []
 
-
-target_features: {}
+  ### Configuration for engineering target feature (leave empty dict if unused)
+  target_features: {}

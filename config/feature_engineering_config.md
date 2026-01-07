@@ -1,3 +1,9 @@
+# Feature Engineering Configuration Guide
+
+This guide describes how to specify feature engineering configurations that feed into both global and model-specific feature engineering pipelines. These are used to set configurations in `global_feature_engineering.yaml` and `model_params.yaml`.
+
+---
+
 
 ## Overall Structure
 
@@ -11,10 +17,10 @@ feature_engineering:
     ...
   log_transform_features:
     ...
-target_features:
-  label:
-    dtype: categorical
-    ordinal: false
+  target_features:
+    label:
+      dtype: categorical
+      ordinal: false
 ```
 
 Steps are executed in the order they appear under `feature_engineering`.
